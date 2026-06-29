@@ -47,7 +47,23 @@ This folder contains VM files. Can Codex work here safely?
 Clean Git temporary objects without deleting history.
 ```
 
-### 3. Read The Risk Report
+### 3. Run The Read-Only Active Scanner
+
+After installing the skill, Codex can run the bundled scanner to show whether the problem already exists and list suspicious files and folders:
+
+```bash
+python ~/.codex/skills/protect-large-git-workspaces/scripts/scan_large_git_workspace.py /path/to/workspace
+```
+
+Windows PowerShell:
+
+```powershell
+python "$env:USERPROFILE\.codex\skills\protect-large-git-workspaces\scripts\scan_large_git_workspace.py" "C:\path\to\workspace"
+```
+
+The scanner is read-only. It reports large files, risky extensions, suspicious directories, aggregate many-small-file risk, `.git/objects` size, and `tmp_obj_*` garbage. It exits with code `2` when risk is detected and `0` when no obvious risk is found.
+
+### 4. Read The Risk Report
 
 Codex should report:
 
@@ -58,7 +74,7 @@ Codex should report:
 - the exact command it wants to run
 - safer alternatives such as `.gitignore` or moving code to a clean workspace
 
-### 4. Confirm Only If You Accept The Risk
+### 5. Confirm Only If You Accept The Risk
 
 If Codex needs to run a risky Git write or cleanup operation, it will ask for explicit confirmation. Use one of these tokens only when you understand and accept the risk:
 
@@ -374,6 +390,8 @@ protect-large-git-workspaces/
       SKILL.md
       agents/
         openai.yaml
+      scripts/
+        scan_large_git_workspace.py
   docs/
     README.zh-CN.md
     large-git-safety.zh-CN.md
@@ -410,6 +428,13 @@ Why is .git/objects so large?
 Can I run git add . here?
 Clean Git temporary objects without deleting history.
 This folder contains VM files. Can Codex work here safely?
+Scan this workspace and list suspicious files and folders.
+```
+
+Run the scanner directly:
+
+```bash
+python ~/.codex/skills/protect-large-git-workspaces/scripts/scan_large_git_workspace.py /path/to/workspace
 ```
 
 ## What It Helps With

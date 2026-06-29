@@ -47,7 +47,23 @@ Copy-Item -Recurse -Force ".\skills\protect-large-git-workspaces" "$env:USERPROF
 帮我清理 Git 临时对象，但不要误删历史。
 ```
 
-### 3. 阅读风险报告
+### 3. 运行只读主动扫描
+
+安装后，可以让 Codex 运行 skill 自带的扫描脚本，判断问题是否已经发生，并列出可疑文件和文件夹：
+
+```bash
+python ~/.codex/skills/protect-large-git-workspaces/scripts/scan_large_git_workspace.py /path/to/workspace
+```
+
+Windows PowerShell：
+
+```powershell
+python "$env:USERPROFILE\.codex\skills\protect-large-git-workspaces\scripts\scan_large_git_workspace.py" "C:\path\to\workspace"
+```
+
+这个扫描器只读，不会删除、移动、暂存或修改文件。它会报告大文件、危险扩展名、可疑目录、大量小文件聚合风险、`.git/objects` 大小和 `tmp_obj_*` 垃圾。检测到风险时退出码为 `2`，没有发现明显风险时退出码为 `0`，方便以后接入自动化预警。
+
+### 4. 阅读风险报告
 
 Codex 应该说明：
 
@@ -58,7 +74,7 @@ Codex 应该说明：
 - 它准备执行的具体命令
 - 更安全的替代方案，例如写 `.gitignore` 或把代码移到干净工作区
 
-### 4. 只有接受风险时才确认
+### 5. 只有接受风险时才确认
 
 如果 Codex 需要执行高风险 Git 写入或清理操作，它会要求你明确确认。只有在你理解并接受风险时，才回复以下任意一个确认令牌：
 
@@ -375,6 +391,8 @@ protect-large-git-workspaces/
       SKILL.md
       agents/
         openai.yaml
+      scripts/
+        scan_large_git_workspace.py
   docs/
     large-git-safety.zh-CN.md
 ```
@@ -410,6 +428,13 @@ Copy-Item -Recurse -Force ".\skills\protect-large-git-workspaces" "$env:USERPROF
 帮我检查这个目录能不能 git add .
 帮我清理 Git 临时对象，但不要误删历史。
 这个目录里有虚拟机文件，能不能交给 Codex 操作？
+主动扫描这个工作区，并列出可疑文件和文件夹。
+```
+
+直接运行扫描器：
+
+```bash
+python ~/.codex/skills/protect-large-git-workspaces/scripts/scan_large_git_workspace.py /path/to/workspace
 ```
 
 ## 适合解决的问题

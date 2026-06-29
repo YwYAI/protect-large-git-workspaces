@@ -1,7 +1,7 @@
 interface:
   display_name: "Protect Large Git Workspaces"
   short_description: "Guard Git from large or many files"
-  default_prompt: "Use $protect-large-git-workspaces before Git or workspace snapshot operations that may touch large, generated, or numerous files."
+  default_prompt: "Use $protect-large-git-workspaces to scan this workspace for large-file Git risk before any broad Git write, snapshot, or cleanup operation."
 
 policy:
   allow_implicit_invocation: true

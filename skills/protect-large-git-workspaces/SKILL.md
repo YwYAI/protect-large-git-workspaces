@@ -17,7 +17,18 @@ Risky operations include:
 
 Allowed without confirmation:
 - Read-only inspection such as `git status --short --ignored`, `git rev-parse`, `git ls-files`, `git count-objects -vH`, `Get-ChildItem`, `rg`, and process/log inspection.
+- Running the bundled read-only scanner `scripts/scan_large_git_workspace.py`.
 - Adding or updating `.gitignore` to exclude clearly unsafe large generated artifacts, if the edit itself is small and scoped.
+
+## Active Scan
+
+When the user asks to scan, check, audit, diagnose, or look for existing large Git workspace risk, run the bundled read-only scanner from this skill:
+
+```bash
+python scripts/scan_large_git_workspace.py /path/to/workspace
+```
+
+Use the available Python executable for the environment. The scanner reports whether risk already exists, including `.git/objects` bloat, `tmp_obj_*` garbage, large files, risky extensions, suspicious directories, aggregate candidate size, and many-small-file risk. It does not modify files.
 
 ## Risk Scan
 
