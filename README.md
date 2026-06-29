@@ -1,86 +1,92 @@
 # Protect Large Git Workspaces
 
-一个用于 Codex 的安全型 skill，用来防止代理在包含虚拟机、磁盘镜像、ISO、备份包、大型媒体或其他大文件的工作区里，意外执行高风险 Git 操作，导致 `.git/objects` 在短时间内膨胀到几十 GB 甚至几百 GB。
+Languages: English | [中文](docs/README.zh-CN.md)
 
-这个 skill 的目标不是让 Git 更会管理大文件，而是让 Codex 在危险操作前停下来、看清楚、说清楚、等确认。
+A Codex skill that prevents accidental Git object-store blowups when an agent works inside directories containing virtual machines, disk images, ISO files, backups, generated outputs, media assets, or many small files.
 
-## 适用场景
+The goal is not to make Git a better large-file storage system. The goal is to make Codex stop before risky Git operations, scan the workspace, explain the consequences, offer safer alternatives, and require explicit human confirmation.
 
-当 Codex 工作区里包含以下内容时，这个 skill 应该介入：
+## When To Use This
 
-- VirtualBox 虚拟机目录，例如 `.vdi`、`.sav`、`.vbox-prev`。
-- VMware 虚拟机目录，例如 `.vmdk`、`.vmem`、`.vmss`、`.vmwarevm/`。
-- Hyper-V 磁盘，例如 `.vhd`、`.vhdx`。
-- QEMU / UTM 镜像，例如 `.qcow2`、`.qed`、`.utm/`。
-- Parallels 虚拟机，例如 `.pvm/`、`.hdd`。
-- Android 模拟器、WSL 导出包、系统安装 ISO、OVA/OVF 虚拟机导出包。
-- 大型压缩包、备份包、媒体文件、数据库 dump、超过 100 MB 的任意文件。
-- 单个文件都不大，但数量很多或总体积很大的生成文件、依赖目录、缓存目录。
-- 已经出现 `.git/objects` 膨胀、`tmp_obj_*` 垃圾对象、Git 垃圾回收失败或磁盘空间异常消耗的仓库。
+Use this skill when a Codex workspace may contain:
 
-典型触发请求包括：
+- VirtualBox files such as `.vdi`, `.sav`, `.vbox-prev`.
+- VMware files such as `.vmdk`, `.vmem`, `.vmss`, `.vmwarevm/`.
+- Hyper-V disks such as `.vhd`, `.vhdx`.
+- QEMU / UTM images such as `.qcow2`, `.qed`, `.utm/`.
+- Parallels virtual machines such as `.pvm/`, `.hdd`.
+- Android emulator images, WSL exports, system install ISOs, OVA/OVF exports.
+- Large archives, backups, media files, database dumps, or any file over 100 MB.
+- Many small generated files whose aggregate size is large.
+- Repositories where `.git/objects` is already unexpectedly large or contains many `tmp_obj_*` files.
+
+Typical user requests that should trigger this skill:
 
 ```text
-帮我提交当前目录
-帮我 git add .
-帮我清理 .git/objects
-为什么 .git 变得很大
-帮我把这个虚拟机目录交给 Codex 继续操作
-帮我运行 git gc
-帮我删除 tmp_obj_*
+Commit this whole directory.
+Run git add .
+Clean up .git/objects.
+Why is this repository's .git directory huge?
+Can Codex work inside this VM directory?
+Run git gc.
+Delete tmp_obj_* files.
 ```
 
-## 解决的问题
+## Problem Statement
 
-Git 默认会把 `git add` 涉及的文件写入对象库。对于代码文件，这是正常行为；对于虚拟机磁盘和镜像文件，这可能造成严重后果。
+Git writes added file content into `.git/objects`. For source code, that is expected. For VM disks, memory snapshots, ISO images, exported appliances, dependency folders, build outputs, or thousands of generated files, it can be disastrous.
 
-例如一个 40 GB 的虚拟机磁盘被 `git add .` 或 `git hash-object` 处理时，Git 会尝试把它写入 `.git/objects`。类似地，即使没有单个文件超过 100 MB，几千个 5 MB 到 50 MB 的文件也可能在短时间内写入数 GB 到数十 GB 的 Git 对象。如果操作被中断、后台重试、或 Codex 自动快照反复触发，就可能出现：
+For example, if a 40 GB virtual disk is processed by `git add .` or `git hash-object`, Git may try to write it into `.git/objects`. Even when no single file is larger than 100 MB, a few thousand 5-50 MB files can still write many GB of object data in a short time.
 
-- `.git/objects` 短时间内增加几十 GB。
-- 上百个 `tmp_obj_*` 临时对象残留。
-- Git 命令变慢、卡住或超时。
-- 磁盘空间被耗尽。
-- 用户误以为是虚拟机、同步软件或系统更新造成的问题。
-- 清理时误删 `.git`、对象库或历史记录。
+Common symptoms:
 
-这个 skill 针对的是“操作前缺少风险感知”的问题。它把高风险 Git 操作改造成一个受控流程。
+- `.git/objects` grows by tens or hundreds of GB.
+- Hundreds of `tmp_obj_*` files appear under `.git/objects`.
+- Git commands become slow, hang, or time out.
+- Disk space disappears unexpectedly.
+- The user mistakes the cause for VM software, sync tools, or system updates.
+- Cleanup becomes risky because deleting `.git` or object files can destroy history or evidence.
 
-## 设计目标
+This skill addresses the missing risk check before an agent performs Git writes or cleanup.
 
-这个 skill 按照安全产品和工业设计的思路设计：先识别使用场景，再限制危险动作，最后给用户一个清楚、可恢复、可确认的决策点。
+## Design Goals
 
-### 1. 可感知
+The skill is designed like a safety control in an industrial workflow: identify the environment, isolate dangerous actions, present consequences, and require explicit confirmation before proceeding.
 
-Codex 在执行危险操作前，必须先扫描工作区，并把风险用用户能理解的语言说出来。用户不应该需要知道 Git 对象库的内部机制，才能理解为什么这个操作危险。
+### Visible Risk
 
-### 2. 可预防
+Codex must scan before risky operations and explain risk in the user's current language. The user should not need to understand Git internals to know why an operation is dangerous.
 
-默认不执行高风险 Git 写入，不把大文件送进 `.git/objects`。优先建议 `.gitignore`、换工作区、只读诊断等低风险方案。
+### Safe Defaults
 
-### 3. 可确认
+Do not write large or numerous files into `.git/objects` by default. Prefer read-only diagnosis, `.gitignore`, or moving code work into a non-VM workspace.
 
-如果用户确实要继续执行，必须明确确认。模糊回复不算授权。默认提供中英两个等价确认令牌，方便中文读者理解，也方便跨语言环境复制粘贴：
+### Explicit Confirmation
+
+Ambiguous replies are not authorization. The default confirmation tokens are:
 
 ```text
 CONFIRM-GIT-RISK
 确认承担Git大文件风险
 ```
 
-### 4. 可恢复
+The English token is language-neutral and easy to copy. The Chinese token is included for Chinese readers.
 
-在清理 `.git/objects`、删除 `tmp_obj_*`、运行 `git gc` 或删除 `.git` 前，必须先列出影响范围。这样用户可以先保存证据、备份目录，或选择更保守的清理方式。
+### Recoverability
 
-### 5. 可迁移
+Before cleanup commands such as deleting `tmp_obj_*`, pruning, garbage collection, or deleting `.git`, Codex must list the scope and explain what may be lost.
 
-规则不绑定某一个虚拟机名称，也不绑定某一个虚拟机平台。VirtualBox、VMware、Hyper-V、QEMU、UTM、Parallels、WSL、Android 模拟器和其他磁盘镜像目录都按同一套风险模型处理。
+### Portability
 
-## 防护模型
+The rule is not tied to one VM name or platform. VirtualBox, VMware, Hyper-V, QEMU, UTM, Parallels, WSL exports, Android emulators, and similar disk-image workflows all follow the same risk model.
 
-这个 skill 把操作分成两类。
+## Protection Model
 
-### 允许直接执行的只读操作
+The skill separates operations into read-only inspection and high-risk writes/deletions.
 
-这些操作用于观察状态，通常不会改变文件或 Git 对象库：
+### Read-Only Operations
+
+These are usually safe to run without confirmation:
 
 ```bash
 git status --short --ignored
@@ -89,7 +95,7 @@ git ls-files
 git count-objects -vH
 ```
 
-Windows 下也可以只读扫描大文件和聚合风险：
+Windows PowerShell checks:
 
 ```powershell
 Get-ChildItem -LiteralPath . -Recurse -Force -File |
@@ -104,7 +110,7 @@ $candidateFiles |
   Select-Object Count,Sum
 ```
 
-macOS / Linux 下可以使用这些通用只读检查：
+macOS / Linux checks:
 
 ```bash
 find . -path ./.git -prune -o -type f -size +100M -print
@@ -114,11 +120,11 @@ git status --short --ignored
 git count-objects -vH
 ```
 
-如果需要更精细的聚合统计，GNU/Linux 可以使用 `du --files0-from`；macOS 默认 `du` 不支持这个参数，应使用 `du -sh` 或安装 GNU coreutils 后再使用 GNU 版本命令。
+For more precise aggregate statistics on GNU/Linux, `du --files0-from` may be used. macOS ships BSD `du`, so use `du -sh` unless GNU coreutils is installed.
 
-### 必须人工确认的高风险操作
+### High-Risk Operations
 
-以下操作在存在大文件或虚拟机文件时必须停下来确认：
+These require a risk scan and explicit confirmation when risky files or aggregate risk are present:
 
 ```bash
 git add
@@ -131,25 +137,36 @@ git gc
 git prune
 ```
 
-以及：
+Also risky:
 
-- 删除 `.git`。
-- 删除 `.git/objects`。
-- 删除 `.git/objects/*/tmp_obj_*`。
-- 对虚拟机目录或磁盘镜像目录做递归删除、移动、清理。
-- 任何可能写入 `.git/objects` 的 Codex 工作区快照、checkpoint 或 turn diff 操作。
+- Deleting `.git`.
+- Deleting `.git/objects`.
+- Deleting `.git/objects/*/tmp_obj_*`.
+- Recursive move/delete/cleanup inside VM or disk-image directories.
+- Any Codex workspace snapshot, checkpoint, or turn diff operation that may write under `.git/objects`.
 
-## 工作流程
+## Risk Thresholds
 
-当 Codex 准备执行高风险 Git 操作时，skill 要求它按以下流程处理。
+The skill treats a workspace as risky if any of these are true:
 
-### Step 1: 只读扫描
+- Any file is over 100 MB.
+- Candidate files have aggregate size over 500 MB.
+- There are over 1000 candidate files.
+- More than 100 candidate files are larger than 10 MB.
+- The workspace contains VM disks, disk images, snapshots, or ISO-like files.
+- The workspace contains generated/dependency/cache directories such as `node_modules/`, `.venv/`, `dist/`, `build/`, `target/`, `.cache/`, `.next/`.
+- `.git/objects` is already unusually large.
+- `.git/objects` contains many `tmp_obj_*` files.
 
-先检查工作区里是否存在大文件、虚拟机磁盘、系统镜像、备份包、媒体文件和已有 Git 对象库膨胀。
+The 100 MB threshold is intentionally conservative. It aligns with GitHub's single-file limit and serves as a warning threshold, not an absolute ban.
 
-不要只看“最大文件”。还要看候选文件总数和总大小。很多小于 100 MB 的文件在 Git 里仍然可能造成大规模对象写入。
+## Workflow
 
-重点识别：
+### 1. Scan First
+
+Codex checks large files, aggregate size, candidate file count, VM/image file extensions, generated directories, and existing Git object bloat.
+
+Common risky patterns:
 
 ```text
 *.vdi
@@ -178,86 +195,70 @@ git prune
 Snapshots/
 ```
 
-### Step 2: 判断风险
+### 2. Explain The Risk
 
-如果扫描发现：
+Codex must state:
 
-- 任意文件超过 100 MB。
-- 候选文件总大小超过 500 MB。
-- 候选文件数量超过 1000 个。
-- 超过 100 个候选文件大于 10 MB。
-- 工作区包含虚拟机、磁盘镜像或快照文件。
-- 工作区包含明显的生成目录或依赖目录，例如 `node_modules/`、`.venv/`、`dist/`、`build/`、`target/`、`.cache/`、`.next/`。
-- `.git/objects` 已经异常大。
-- `.git/objects` 里存在大量 `tmp_obj_*`。
+- The exact command or operation it wants to run.
+- Which paths are involved.
+- The largest relevant files.
+- Candidate file count and aggregate size if many small files create the risk.
+- Likely consequences, such as object-store growth, `tmp_obj_*` leftovers, slow Git operations, or history loss.
+- A safer alternative.
 
-则必须把操作升级为需要人工确认的风险操作。
-
-### Step 3: 给出风险说明
-
-Codex 必须说明：
-
-- 准备执行的具体命令。
-- 哪些路径或文件会受影响。
-- 最大文件大概多大。
-- 候选文件总数和总大小是多少。
-- 可能造成的后果。
-- 更安全的替代方案。
-
-示例：
+Example for a large VM image:
 
 ```text
-我检测到当前工作区包含大型虚拟机或磁盘镜像文件，可能达到几十 GB。
+I detected VM or disk-image files in this workspace, possibly tens of GB.
 
-如果执行 `git add .` 或继续进行工作区快照，Git 可能把这些文件写入 `.git/objects`，导致额外占用几十 GB 到几百 GB。操作中断后还可能留下 `tmp_obj_*` 临时垃圾。
+Running `git add .` or continuing a workspace snapshot may write those files into `.git/objects`, consuming tens or hundreds of GB. If interrupted, Git may leave `tmp_obj_*` garbage.
 
-更安全的做法是先加入 `.gitignore`，或把代码工作区移动到不包含虚拟机文件的目录。
+Safer options: add ignore rules first, move code into a non-VM workspace, or only clean confirmed Git temporary garbage.
 
-如果你仍然确认执行，请回复以下任意一个确认令牌：
+If you still want me to continue, reply with one of:
 
 CONFIRM-GIT-RISK
 确认承担Git大文件风险
 ```
 
-如果风险来自大量小文件，提示应改成类似：
+Example for many smaller files:
 
 ```text
-我检测到当前工作区虽然没有超过 100 MB 的单个文件，但有 3200 个候选文件，总大小约 8.6 GB。
+I did not find a single file over 100 MB, but I found 3200 candidate files with an aggregate size of about 8.6 GB.
 
-如果执行 `git add .` 或继续进行工作区快照，Git 仍可能把这些文件写入 `.git/objects`，造成数 GB 到数十 GB 的对象库增长。大量文件也会让 Git 状态检查、差异计算和垃圾回收变慢。
+Running `git add .` or continuing a workspace snapshot may still write many GB into `.git/objects`. It can also make Git status, diff, and garbage collection slow.
 
-更安全的做法是先确认这些文件是否是构建产物、依赖目录或缓存目录；如果是，应先加入 `.gitignore`，例如 `node_modules/`、`dist/`、`build/`、`.cache/`。
+Safer options: check whether these are build artifacts, dependency folders, cache directories, logs, screenshot sequences, or frame outputs; if so, add them to `.gitignore`.
 
-如果你仍然确认执行，请回复以下任意一个确认令牌：
+If you still want me to continue, reply with one of:
 
 CONFIRM-GIT-RISK
 确认承担Git大文件风险
 ```
 
-### Step 4: 等待明确确认
+### 3. Wait For Explicit Confirmation
 
-只有明确确认才允许继续，例如：
+Accept examples:
 
 ```text
 CONFIRM-GIT-RISK
 确认承担Git大文件风险
-确认执行
-同意执行
+confirm execution
 ```
 
-以下回复不应视为确认：
+Do not accept:
 
 ```text
-继续
-可以吧
-你看着办
-随便
-应该没事
+go ahead
+maybe
+you decide
+continue
+probably fine
 ```
 
-### Step 5: 优先执行低风险替代方案
+### 4. Prefer Safer Alternatives
 
-默认优先建议或执行小范围安全修改，例如添加 `.gitignore`：
+Default `.gitignore` suggestions:
 
 ```gitignore
 *.vdi
@@ -297,9 +298,9 @@ coverage/
 .nuxt/
 ```
 
-## 安装
+## Installation
 
-推荐仓库结构：
+Repository layout:
 
 ```text
 protect-large-git-workspaces/
@@ -311,168 +312,164 @@ protect-large-git-workspaces/
       agents/
         openai.yaml
   docs/
+    README.zh-CN.md
     large-git-safety.zh-CN.md
 ```
 
-安装到本地 Codex：
+Install to Codex on macOS/Linux:
 
 ```bash
 mkdir -p ~/.codex/skills
 cp -R skills/protect-large-git-workspaces ~/.codex/skills/
 ```
 
-Windows PowerShell：
+Install on Windows PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.codex\skills" | Out-Null
 Copy-Item -Recurse -Force ".\skills\protect-large-git-workspaces" "$env:USERPROFILE\.codex\skills\"
 ```
 
-安装后，新开的 Codex 会话会在相关任务中发现并使用这个 skill。
+Open a new Codex session after installation.
 
-## 使用方式
+## Usage
 
-你可以显式要求 Codex 使用：
-
-```text
-使用 $protect-large-git-workspaces 检查这个目录是否适合作为 Git 工作区。
-```
-
-也可以在涉及 Git、大文件或虚拟机目录的问题中自动触发，例如：
+Explicit use:
 
 ```text
-为什么这个仓库的 .git/objects 这么大？
-帮我检查这个目录能不能 git add .
-帮我清理 Git 临时对象，但不要误删历史。
-这个目录里有虚拟机文件，能不能交给 Codex 操作？
+Use $protect-large-git-workspaces to check whether this directory is safe as a Git workspace.
 ```
 
-## 适合解决的问题
+Natural-language requests that should trigger it:
 
-### 1. Git 对象库异常膨胀
+```text
+Why is .git/objects so large?
+Can I run git add . here?
+Clean Git temporary objects without deleting history.
+This folder contains VM files. Can Codex work here safely?
+```
 
-症状：
+## What It Helps With
 
-- `.git/objects` 占用几十 GB 或几百 GB。
-- `git count-objects -vH` 显示大量 loose objects 或 garbage。
-- `.git/objects/xx/tmp_obj_*` 很多。
+### Git Object Store Blowups
 
-skill 行为：
+Symptoms:
 
-- 先诊断对象库大小。
-- 列出大对象、临时对象和最近写入时间。
-- 区分可删除的 Git 临时垃圾和可能仍被引用的对象。
-- 清理前要求明确确认。
+- `.git/objects` uses tens or hundreds of GB.
+- `git count-objects -vH` shows many loose objects or garbage.
+- Many `.git/objects/xx/tmp_obj_*` files exist.
 
-### 2. 虚拟机目录被误当作 Git 工作区
+Behavior:
 
-症状：
+- Diagnose object-store size first.
+- Identify large objects and temporary objects.
+- Avoid deleting history or evidence without confirmation.
 
-- 工作区里有 `.vdi`、`.vmdk`、`.vhdx`、`.qcow2`、`.sav`、`.iso`。
-- 用户或 Codex 准备运行 `git add .`。
+### VM Directories Used As Git Workspaces
 
-skill 行为：
+Symptoms:
 
-- 阻止直接 Git 写入。
-- 提醒后果。
-- 建议添加 `.gitignore` 或迁移代码目录。
+- Workspace contains `.vdi`, `.vmdk`, `.vhdx`, `.qcow2`, `.sav`, `.iso`.
+- The user or agent is about to run `git add .`.
 
-### 3. 大量小文件造成聚合风险
+Behavior:
 
-症状：
+- Block direct Git writes.
+- Explain consequences.
+- Suggest `.gitignore` or a separate code workspace.
 
-- 没有单个文件超过 100 MB。
-- 但未跟踪或待提交文件数量很多，例如几千到几万个。
-- 总大小达到数百 MB、数 GB 或更高。
-- 常见来源是 `node_modules/`、`.venv/`、`dist/`、`build/`、`target/`、`.cache/`、导出的日志、截图序列、帧序列、批量中间产物。
+### Many Small Files Creating Aggregate Risk
 
-skill 行为：
+Symptoms:
 
-- 不只检查最大文件，也统计候选文件数量和总大小。
-- 当候选总大小超过 500 MB、候选文件数超过 1000 个、或大于 10 MB 的候选文件超过 100 个时触发确认。
-- 优先建议将生成目录、依赖目录和缓存目录写入 `.gitignore`。
-- 要求用户确认后才允许执行 Git 写入。
+- No single file exceeds 100 MB.
+- Thousands or tens of thousands of files are untracked or changed.
+- Aggregate size reaches hundreds of MB or several GB.
+- Common sources: `node_modules/`, `.venv/`, `dist/`, `build/`, `target/`, `.cache/`, logs, screenshot sequences, frame outputs.
 
-### 4. 代理后台快照带来的副作用
+Behavior:
 
-症状：
+- Count candidate files and estimate aggregate size.
+- Trigger confirmation when aggregate thresholds are crossed.
+- Prefer ignoring generated, dependency, and cache directories.
 
-- 用户没有手动运行 `git add`，但 `.git/objects` 仍增长。
-- Codex 或其他代理工具在工作区里执行了快照、diff、checkpoint。
+### Agent Snapshot Side Effects
 
-skill 行为：
+Symptoms:
 
-- 要求代理在写入 `.git/objects` 前做风险扫描。
-- 明确说明只能约束代理发起或可见的操作。
-- 对完全绕过模型的产品内部行为不做不实承诺。
+- The user did not manually run `git add`, but `.git/objects` still grows.
+- Codex or another agent tool creates snapshots, diffs, or checkpoints.
 
-### 5. 清理时避免二次事故
+Behavior:
 
-症状：
+- Require risk scanning before visible agent-initiated writes to `.git/objects`.
+- Clearly state that the skill can guide compliant agent behavior, not guarantee interception of all product-internal background mechanisms.
 
-- 用户想删除 `.git`、`.git/objects` 或 `tmp_obj_*`。
-- 磁盘空间紧张，希望快速释放。
+### Safer Cleanup
 
-skill 行为：
+Symptoms:
 
-- 先列出清理对象。
-- 说明会丢失什么。
-- 区分临时垃圾、未引用对象和可能需要保留的 Git 历史。
-- 要求明确确认后再执行删除。
+- User wants to delete `.git`, `.git/objects`, or `tmp_obj_*`.
+- Disk space is low.
 
-## 不解决的问题
+Behavior:
 
-这个 skill 不是 Git LFS 替代品，也不是虚拟机备份工具。
+- List what would be removed.
+- Explain what may be lost.
+- Distinguish temporary garbage from possibly referenced history.
+- Require confirmation before deletion.
 
-它不能保证：
+## Non-Goals
 
-- Git 可以安全管理几十 GB 的虚拟机磁盘。
-- Codex Desktop 的所有内部后台机制都一定会被拦截。
-- 删除 `.git` 或对象库后还能恢复历史。
-- 未备份的大文件清理一定可逆。
+This skill is not:
 
-如果确实需要版本化大型二进制文件，应考虑：
+- A Git LFS replacement.
+- A VM backup system.
+- A guarantee that Git can safely manage large VM disks.
+- A guarantee that all Codex Desktop internal background operations can be intercepted.
+- A recovery tool after `.git` or object history has been deleted.
 
-- Git LFS。
-- DVC。
-- 专门的 artifact storage。
-- 备份系统或对象存储。
-- 虚拟机平台自带的快照和导出机制。
+For real large-file versioning, consider:
 
-## 设计原则
+- Git LFS.
+- DVC.
+- Artifact storage.
+- Backup systems or object storage.
+- VM platform snapshot/export tools.
 
-### 人先于命令
+## Design Principles
 
-用户真正关心的不是 Git 命令本身，而是磁盘空间、数据安全、可恢复性和操作后果。README 和 skill 都围绕这些用户目标组织。
+### People Before Commands
 
-### 默认安全
+Users care about disk space, data safety, recoverability, and consequences more than command names.
 
-在信息不足时，不执行写入和删除。先扫描、先解释、先确认。
+### Safe By Default
 
-### 降低误操作成本
+When context is incomplete, do not write or delete. Scan, explain, then ask.
 
-危险命令不直接执行，必须经过确认门槛。确认文本设计成明确、可复制、不会被普通寒暄误触发。
+### Clear Confirmation
 
-### 保持透明
+Confirmation text is explicit and copyable. Casual replies should not accidentally authorize dangerous work.
 
-Codex 需要说明它看到了什么、准备做什么、为什么危险、替代方案是什么。
+### Transparent Reasoning
 
-### 不过度承诺
+Codex should state what it found, what it wants to do, why it is risky, and what safer alternatives exist.
 
-skill 能约束遵循指令的代理行为，但不能声明能控制所有软件内部后台行为。这个边界必须在文档里说清楚。
+### No Overclaiming
 
-## 发布前检查清单
+The skill guides agent behavior. It does not claim to control all software internals.
 
-发布到 GitHub 前建议确认：
+## Release Checklist
 
-- `SKILL.md` 能通过 Codex skill 校验。
-- `agents/openai.yaml` 存在且 `default_prompt` 包含 `$protect-large-git-workspaces`。
-- 仓库不包含个人路径、用户名、真实事故日志或私有文件名。
-- README 中的示例路径使用泛化名称。
-- 文档包含 Windows、macOS、Linux 的扫描建议。
-- 已明确说明确认流程和局限性。
-- 已添加合适的开源许可证。
+- `SKILL.md` passes Codex skill validation.
+- `agents/openai.yaml` exists and `default_prompt` includes `$protect-large-git-workspaces`.
+- The repository contains no personal paths, usernames, real incident logs, tokens, or private file names.
+- Examples use generic paths and file names.
+- Documentation includes Windows, macOS, and Linux scan suggestions.
+- Confirmation flow and limitations are documented.
+- MIT License is included.
 
-## 许可证
+## License
 
-本项目使用 MIT License。详见 [LICENSE](LICENSE)。
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
