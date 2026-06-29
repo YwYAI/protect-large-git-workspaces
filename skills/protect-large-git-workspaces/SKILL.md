@@ -1,6 +1,6 @@
 ---
 name: protect-large-git-workspaces
-description: Protect Git/Codex workspaces from accidental storage blowups. Use whenever Codex may run Git commands, create workspace snapshots/checkpoints, inspect or modify .git/objects, operate in directories containing any virtual machine, disk image, ISO file, exported appliance, emulator image, WSL export, backup, media archive, many generated files, large binaries, aggregate workspace candidate content over 500 MB, over 1000 candidate files, over 100 candidate files larger than 10 MB, any file over 100 MB, or propose cleanup of Git objects. Requires risk scanning, consequence disclosure, and explicit user confirmation before risky Git writes or deletions.
+description: Protect Git/Codex workspaces from accidental storage blowups. Use whenever Codex may run Git commands, create workspace snapshots/checkpoints, inspect or modify .git/objects, operate in directories containing any virtual machine, disk image, ISO file, exported appliance, emulator image, WSL export, backup, media archive, many generated files, large binaries, aggregate workspace candidate content over 500 MB, over 1000 candidate files, over 100 candidate files larger than 10 MB, any file over 100 MB, or propose cleanup of Git objects. Requires risk scanning, explicit risk assessment standards, deletion evidence, consequence disclosure, and explicit user confirmation before risky Git writes or deletions.
 ---
 
 # Protect Large Git Workspaces
@@ -73,11 +73,27 @@ These scans are conservative workspace estimates. If the exact Git candidate set
 
 Treat aggregate size as risky even when every individual file is below 100 MB. For example, 2000 files of 5 MB each can still write about 10 GB of object data.
 
+## Risk Assessment Standard
+
+Every risk report must state the evaluation standard and the matched thresholds. Use this scale:
+
+- Critical: any proposed deletion of `.git`, `.git/objects`, Git history, or recursive cleanup in a VM/disk-image workspace; `.git/objects` growth over 5 GiB; `tmp_obj_*` over 1 GiB or 100 files; any VM/disk/snapshot/image/archive/media file over 1 GiB; aggregate candidate content over 10 GiB.
+- High: any file over 100 MiB; aggregate candidate content over 500 MiB; more than 1000 candidate files; more than 100 files over 10 MiB; VM/disk-image/archive/media extensions; suspicious generated/cache/dependency directories; `.git/objects` over 500 MiB or any `tmp_obj_*`.
+- Medium: generated/cache/dependency directories or risky extensions exist but thresholds are below High; aggregate candidate content is 100-500 MiB; unusual recent writes to `.git/objects` need investigation.
+- Low: no risky extensions, no suspicious directories, no large files, aggregate candidate content below 100 MiB, and `.git/objects` has no obvious bloat.
+
+When reporting, include:
+- Risk level.
+- Matched criteria and thresholds.
+- Evidence used: scanner output, command output, file sizes, timestamps, process command lines, logs, or Git status.
+- Unknowns that prevent a stronger conclusion.
+
 ## Confirmation Format
 
 If risk exists, stop and ask for confirmation in the user's current language. If the user uses Chinese, ask in Chinese. Include:
 - The exact command or operation you want to run.
 - The large paths involved and their approximate sizes.
+- The risk level and the assessment standards that were matched.
 - The candidate file count and aggregate candidate size when many smaller files create the risk.
 - The likely consequence, such as writing tens or hundreds of GB into `.git/objects`, leaving `tmp_obj_*`, increasing disk usage, or deleting Git history.
 - A safer alternative, usually adding `.gitignore`, moving the work to a non-VM directory, or deleting only confirmed Git temporary garbage.
@@ -144,8 +160,23 @@ coverage/
 
 - If cleanup is requested, first list what would be removed. Do not delete `.git`, `.git/objects`, or `tmp_obj_*` until the user confirms the exact scope.
 
+## Deletion Evidence Standard
+
+Do not describe a file or folder as "safe to delete" unless there is evidence. If evidence is incomplete, call it a "cleanup candidate" or "suspected temporary/generated file" instead.
+
+Before recommending deletion, provide:
+- Exact paths, sizes, counts, and last-write times.
+- Why each path is believed to be temporary or generated.
+- Evidence source, such as build logs, package-manager logs, VM/application logs, Codex session logs, shell history, process command lines, or timestamp correlation with a known interrupted command.
+- For `.git/objects/tmp_obj_*`, evidence that no Git process is active, timestamps match an interrupted Git write, and the files are named temporary objects rather than normal loose objects.
+- For generated folders such as `node_modules`, `.venv`, `dist`, `build`, `.cache`, or frame/log outputs, evidence from dependency manifests, build commands, install logs, or reproducible regeneration commands.
+- For VM snapshots, disks, ISOs, exports, backups, and media, do not call them deletable merely because they are large. Treat them as user data unless the user identifies them as disposable or there is platform/log evidence that they are temporary outputs.
+
+If deletion is still requested after evidence is shown, require explicit confirmation for the exact deletion scope. Prefer dry-run listing and backup guidance before any destructive action.
+
 ## Evidence Handling
 
 When diagnosing an existing blowup:
 - Preserve evidence before cleanup: process command lines, `.git/objects` size summaries, `git count-objects -vH`, relevant Codex session log paths, and hourly object write distribution.
 - Clearly distinguish model-initiated commands, Codex Desktop background behavior, user commands, and third-party application writes.
+- When interpreting logs, quote or summarize the exact command, timestamp, and file path that connect a process to the generated files. If no such link is found, say that the cause or deletability is unproven.

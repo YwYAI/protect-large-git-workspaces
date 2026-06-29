@@ -145,6 +145,58 @@ def collect_git_objects(git_objects: Path) -> dict[str, int]:
     return result
 
 
+def risk_level(
+    total_files: int,
+    total_bytes: int,
+    large_files: list[tuple[int, Path]],
+    risky_files: list[tuple[int, Path]],
+    mid_file_count: int,
+    suspicious_dir_count: int,
+    git_stats: dict[str, int],
+    args: argparse.Namespace,
+) -> tuple[str, list[str]]:
+    critical_reasons: list[str] = []
+    high_reasons: list[str] = []
+    medium_reasons: list[str] = []
+
+    if git_stats["bytes"] >= 5 * GB:
+        critical_reasons.append(".git/objects >= 5 GiB")
+    if git_stats["tmp_bytes"] >= GB or git_stats["tmp_files"] >= 100:
+        critical_reasons.append("tmp_obj_* >= 1 GiB or >= 100 files")
+    if any(size >= GB and is_risky_file(path) for size, path in risky_files):
+        critical_reasons.append("VM/disk/snapshot/image/archive/media file >= 1 GiB")
+    if total_bytes >= 10 * GB:
+        critical_reasons.append("aggregate candidate size >= 10 GiB")
+
+    if large_files:
+        high_reasons.append(f"{len(large_files)} file(s) >= {args.large_mb} MiB")
+    if total_bytes >= args.aggregate_mb * MB:
+        high_reasons.append(f"aggregate candidate size >= {args.aggregate_mb} MiB")
+    if total_files >= args.many_files:
+        high_reasons.append(f"candidate file count >= {args.many_files}")
+    if mid_file_count >= args.many_mid_files:
+        high_reasons.append(f"{mid_file_count} file(s) >= {args.mid_mb} MiB")
+    if risky_files:
+        high_reasons.append(f"{len(risky_files)} risky extension file(s)")
+    if suspicious_dir_count:
+        high_reasons.append(f"{suspicious_dir_count} suspicious directories")
+    if git_stats["bytes"] >= args.aggregate_mb * MB:
+        high_reasons.append(f".git/objects >= {args.aggregate_mb} MiB")
+    if git_stats["tmp_files"]:
+        high_reasons.append(".git/objects contains tmp_obj_*")
+
+    if 100 * MB <= total_bytes < args.aggregate_mb * MB:
+        medium_reasons.append("aggregate candidate size is 100-500 MiB")
+
+    if critical_reasons:
+        return "CRITICAL", critical_reasons + high_reasons
+    if high_reasons:
+        return "HIGH", high_reasons
+    if medium_reasons:
+        return "MEDIUM", medium_reasons
+    return "LOW", ["no configured large-file, aggregate, suspicious-directory, or Git object bloat threshold matched"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Read-only scanner for large Git/Codex workspace risk."
@@ -200,23 +252,16 @@ def main() -> int:
 
     git_stats = collect_git_objects(root / ".git" / "objects")
 
-    risk_reasons: list[str] = []
-    if large_files:
-        risk_reasons.append(f"{len(large_files)} file(s) >= {args.large_mb} MiB")
-    if total_bytes >= aggregate_threshold:
-        risk_reasons.append(f"aggregate workspace candidate size >= {args.aggregate_mb} MiB")
-    if total_files >= args.many_files:
-        risk_reasons.append(f"candidate file count >= {args.many_files}")
-    if mid_file_count >= args.many_mid_files:
-        risk_reasons.append(f"{mid_file_count} file(s) >= {args.mid_mb} MiB")
-    if risky_files:
-        risk_reasons.append(f"{len(risky_files)} risky extension file(s)")
-    if suspicious_dirs:
-        risk_reasons.append(f"{len(suspicious_dirs)} suspicious directories")
-    if git_stats["bytes"] >= aggregate_threshold:
-        risk_reasons.append(".git/objects is already large")
-    if git_stats["tmp_files"]:
-        risk_reasons.append(".git/objects contains tmp_obj_* garbage")
+    level, risk_reasons = risk_level(
+        total_files,
+        total_bytes,
+        large_files,
+        risky_files,
+        mid_file_count,
+        len(suspicious_dirs),
+        git_stats,
+        args,
+    )
 
     print("# Large Git Workspace Scan")
     print(f"Workspace: {root}")
@@ -236,14 +281,23 @@ def main() -> int:
         print("- .git/objects: not found")
     print()
 
-    if risk_reasons:
+    if level != "LOW":
         print("## Risk Status")
-        print("RISK DETECTED")
+        print(f"RISK DETECTED: {level}")
         for reason in risk_reasons:
             print(f"- {reason}")
     else:
         print("## Risk Status")
         print("No obvious large Git workspace risk detected by this scanner.")
+        for reason in risk_reasons:
+            print(f"- {reason}")
+    print()
+
+    print("## Assessment Standard")
+    print("- CRITICAL: .git/objects >= 5 GiB, tmp_obj_* >= 1 GiB or >= 100 files, any risky VM/disk/image/archive/media file >= 1 GiB, or aggregate candidate size >= 10 GiB.")
+    print("- HIGH: any file >= large-file threshold, aggregate size >= aggregate threshold, many files, many mid-sized files, risky extensions, suspicious directories, .git/objects >= aggregate threshold, or any tmp_obj_*.")
+    print("- MEDIUM: aggregate candidate size is 100-500 MiB or similar suspicious signals below HIGH thresholds.")
+    print("- LOW: no configured threshold matched.")
     print()
 
     def print_findings(title: str, rows: list[tuple[int, Path]]) -> None:
@@ -280,14 +334,21 @@ def main() -> int:
     print()
 
     print("## Suggested Next Steps")
-    if risk_reasons:
+    if level != "LOW":
         print("- Do not run `git add .`, `git hash-object`, workspace snapshots, or cleanup deletes yet.")
         print("- Review the findings and add generated, VM, cache, dependency, or archive paths to `.gitignore`.")
-        print("- If cleanup is needed, list the exact `.git/objects` files first and require explicit confirmation.")
+        print("- If cleanup is needed, list exact paths first, gather generation/deletability evidence, and require explicit confirmation.")
     else:
         print("- Continue to use normal Git caution. Re-run this scan before broad Git writes.")
 
-    return 2 if risk_reasons else 0
+    print()
+    print("## Deletion Evidence Required")
+    print("- This scanner identifies risk and cleanup candidates; it does not prove that anything is safe to delete.")
+    print("- Before deletion, collect evidence such as build/package-manager logs, VM/application logs, Codex session logs, shell history, process command lines, timestamps matching an interrupted command, and proof that no related process is active.")
+    print("- Treat VM disks, snapshots, ISOs, exports, backups, and media as user data unless the user or platform logs prove they are disposable.")
+    print("- For .git/objects/tmp_obj_* cleanup, verify no Git process is active and show timestamp/command evidence before asking for confirmation.")
+
+    return 2 if level != "LOW" else 0
 
 
 if __name__ == "__main__":

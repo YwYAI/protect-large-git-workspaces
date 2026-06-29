@@ -67,11 +67,13 @@ The scanner is read-only. It reports large files, risky extensions, suspicious d
 
 Codex should report:
 
+- risk level and the assessment standards that matched
 - large files and risky extensions
 - candidate file count and aggregate size
 - generated/dependency/cache directories
 - `.git/objects` size and `tmp_obj_*` garbage when relevant
 - the exact command it wants to run
+- evidence used for any cleanup recommendation
 - safer alternatives such as `.gitignore` or moving code to a clean workspace
 
 ### 5. Confirm Only If You Accept The Risk
@@ -238,6 +240,17 @@ The skill treats a workspace as risky if any of these are true:
 - `.git/objects` contains many `tmp_obj_*` files.
 
 The 100 MB threshold is intentionally conservative. It aligns with GitHub's single-file limit and serves as a warning threshold, not an absolute ban.
+
+## Risk Assessment Standard
+
+Risk reports should be explainable and auditable. Codex should state the risk level, the matched thresholds, the evidence used, and any unknowns.
+
+- **Critical**: proposed deletion of `.git`, `.git/objects`, Git history, or recursive cleanup in a VM/disk-image workspace; `.git/objects` over 5 GiB; `tmp_obj_*` over 1 GiB or 100 files; any risky VM/disk/snapshot/image/archive/media file over 1 GiB; aggregate candidate content over 10 GiB.
+- **High**: any file over 100 MiB; aggregate candidate content over 500 MiB; more than 1000 candidate files; more than 100 files over 10 MiB; VM/disk-image/archive/media extensions; suspicious generated/cache/dependency directories; `.git/objects` over 500 MiB or any `tmp_obj_*`.
+- **Medium**: generated/cache/dependency directories or risky extensions exist but thresholds are below High; aggregate candidate content is 100-500 MiB; unusual recent writes to `.git/objects` need investigation.
+- **Low**: no risky extensions, no suspicious directories, no large files, aggregate candidate content below 100 MiB, and `.git/objects` has no obvious bloat.
+
+The bundled scanner prints this assessment standard with its findings, so a user can see why a workspace was classified as Critical, High, Medium, or Low.
 
 ## Workflow
 
@@ -505,7 +518,23 @@ Behavior:
 - List what would be removed.
 - Explain what may be lost.
 - Distinguish temporary garbage from possibly referenced history.
+- Provide evidence before calling anything safe to delete.
 - Require confirmation before deletion.
+
+## Deletion Evidence Standard
+
+Do not treat "large", "temporary-looking", or "generated-looking" as enough proof for deletion.
+
+Before Codex says a file or folder is safe to delete, it should provide evidence such as:
+
+- exact paths, sizes, counts, and last-write times
+- logs or command records showing what generated the files
+- timestamp correlation with a known interrupted Git, build, package-manager, VM, or Codex operation
+- proof that no related process is still active
+- for `.git/objects/tmp_obj_*`, evidence that the files are temporary Git write leftovers, not normal loose objects
+- for generated folders such as `node_modules`, `.venv`, `dist`, `build`, `.cache`, frame outputs, or log batches, the manifest, build command, install log, or reproducible regeneration command
+
+VM disks, snapshots, ISOs, exports, backups, and media are user data by default. Codex should not call them deletable merely because they are large. If evidence is incomplete, the correct wording is "cleanup candidate" or "suspected generated file", not "safe to delete".
 
 ## Non-Goals
 
