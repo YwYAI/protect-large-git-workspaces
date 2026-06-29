@@ -6,6 +6,69 @@ A Codex skill that prevents accidental Git object-store blowups when an agent wo
 
 The goal is not to make Git a better large-file storage system. The goal is to make Codex stop before risky Git operations, scan the workspace, explain the consequences, offer safer alternatives, and require explicit human confirmation.
 
+## Quick Start
+
+### 1. Install The Skill
+
+Clone this repository and copy the skill folder into your Codex skills directory:
+
+```bash
+git clone https://github.com/YwYAI/protect-large-git-workspaces.git
+cd protect-large-git-workspaces
+mkdir -p ~/.codex/skills
+cp -R skills/protect-large-git-workspaces ~/.codex/skills/
+```
+
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/YwYAI/protect-large-git-workspaces.git
+cd protect-large-git-workspaces
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.codex\skills" | Out-Null
+Copy-Item -Recurse -Force ".\skills\protect-large-git-workspaces" "$env:USERPROFILE\.codex\skills\"
+```
+
+Open a new Codex session after installing.
+
+### 2. Ask Codex To Check A Workspace
+
+Use the skill explicitly:
+
+```text
+Use $protect-large-git-workspaces to check whether this directory is safe as a Git workspace.
+```
+
+Or ask naturally:
+
+```text
+Can I run git add . in this folder?
+Why is .git/objects so large?
+This folder contains VM files. Can Codex work here safely?
+Clean Git temporary objects without deleting history.
+```
+
+### 3. Read The Risk Report
+
+Codex should report:
+
+- large files and risky extensions
+- candidate file count and aggregate size
+- generated/dependency/cache directories
+- `.git/objects` size and `tmp_obj_*` garbage when relevant
+- the exact command it wants to run
+- safer alternatives such as `.gitignore` or moving code to a clean workspace
+
+### 4. Confirm Only If You Accept The Risk
+
+If Codex needs to run a risky Git write or cleanup operation, it will ask for explicit confirmation. Use one of these tokens only when you understand and accept the risk:
+
+```text
+CONFIRM-GIT-RISK
+确认承担Git大文件风险
+```
+
+If you do not want to continue, ask Codex to apply a safer alternative instead, such as adding `.gitignore` rules or moving the code files into a separate repository.
+
 ## When To Use This
 
 Use this skill when a Codex workspace may contain:
@@ -472,4 +535,3 @@ The skill guides agent behavior. It does not claim to control all software inter
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
-

@@ -6,6 +6,69 @@
 
 这个 skill 的目标不是让 Git 更会管理大文件，而是让 Codex 在危险操作前停下来、看清楚、说清楚、等确认。
 
+## 快速上手
+
+### 1. 安装 skill
+
+克隆仓库，并把 skill 文件夹复制到 Codex skills 目录：
+
+```bash
+git clone https://github.com/YwYAI/protect-large-git-workspaces.git
+cd protect-large-git-workspaces
+mkdir -p ~/.codex/skills
+cp -R skills/protect-large-git-workspaces ~/.codex/skills/
+```
+
+Windows PowerShell：
+
+```powershell
+git clone https://github.com/YwYAI/protect-large-git-workspaces.git
+cd protect-large-git-workspaces
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.codex\skills" | Out-Null
+Copy-Item -Recurse -Force ".\skills\protect-large-git-workspaces" "$env:USERPROFILE\.codex\skills\"
+```
+
+安装后，新开一个 Codex 会话。
+
+### 2. 让 Codex 检查工作区
+
+可以显式调用：
+
+```text
+使用 $protect-large-git-workspaces 检查这个目录是否适合作为 Git 工作区。
+```
+
+也可以自然语言提问：
+
+```text
+这个目录能不能 git add .
+为什么 .git/objects 这么大？
+这个目录里有虚拟机文件，Codex 能不能安全操作？
+帮我清理 Git 临时对象，但不要误删历史。
+```
+
+### 3. 阅读风险报告
+
+Codex 应该说明：
+
+- 大文件和危险扩展名
+- 候选文件数量和总大小
+- 生成目录、依赖目录、缓存目录
+- 相关的 `.git/objects` 大小和 `tmp_obj_*` 垃圾
+- 它准备执行的具体命令
+- 更安全的替代方案，例如写 `.gitignore` 或把代码移到干净工作区
+
+### 4. 只有接受风险时才确认
+
+如果 Codex 需要执行高风险 Git 写入或清理操作，它会要求你明确确认。只有在你理解并接受风险时，才回复以下任意一个确认令牌：
+
+```text
+CONFIRM-GIT-RISK
+确认承担Git大文件风险
+```
+
+如果不想继续高风险操作，可以让 Codex 改用更安全的方案，例如先添加 `.gitignore` 规则，或者把代码文件移到单独仓库。
+
 ## 适用场景
 
 当 Codex 工作区里包含以下内容时，这个 skill 应该介入：
